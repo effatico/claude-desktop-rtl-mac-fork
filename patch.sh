@@ -1,13 +1,15 @@
 #!/bin/bash
 # ============================================================================
-# Claude Desktop RTL Patcher for macOS
+# Claude Desktop RTL Patcher for macOS (Persian fork)
 #
-# Improves RTL (right-to-left) text in Claude Desktop on macOS. Each block of
-# Persian/Arabic/Hebrew text mixed with English takes the direction of the
-# language most of it is written in, while code blocks stay LTR.
+# Makes Persian text render correctly in Claude Desktop on macOS. Each block of
+# Persian text mixed with English takes the direction of the language most of
+# it is written in, while code blocks stay LTR. Arabic and Hebrew text follows
+# the same rule; Persian is what this fork is tuned for and tested with.
 #
+# Fork of: https://github.com/soguy/claude-desktop-rtl-mac
 # Based on: https://github.com/shraga100/claude-desktop-rtl-patch (Windows)
-# RTL detection JS payload by @shraga100, adapted for macOS by this project.
+# RTL detection JS payload by @shraga100, adapted for macOS by soguy.
 #
 # How it works:
 #   1. Verifies the original Claude.app is intact and signed by Anthropic
@@ -639,7 +641,7 @@ usage() {
     echo "  --install         Install the RTL patch (creates ~/Applications/Claude-RTL.app)"
     echo "  --uninstall       Remove the patched app"
     echo "  --status          Show current patch status"
-    echo "  --font NAME       Use NAME as the font for RTL (Persian/Arabic/Hebrew) letters."
+    echo "  --font NAME       Use NAME as the font for Persian (and other RTL) letters."
     echo "                    Default: $DEFAULT_RTL_FONT. Bundled in fonts/: Vazirmatn, Parastoo."
     echo "                    --font none keeps the font Claude and the system pick."
     echo "                    Drop your own .woff2/.woff/.ttf/.otf files in fonts/ to bundle"
