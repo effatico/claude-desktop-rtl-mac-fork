@@ -221,12 +221,35 @@ function writeAtomic(file, data, mode) {
     const tmp = file + '.crtl-tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
     const fd = fs.openSync(tmp, 'wx', mode & 0o777);
     try {
-        fs.writeSync(fd, data);
+        fs.writeFileSync(fd, data);
         fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     try { fs.renameSync(tmp, file); } catch (e) {
         try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
         throw e;
+    }
+}
+
+// The original of a patched file. The header is cut out exactly, so that is
+// the source of truth; the backup is only used when the end marker is gone.
+// A backup from another build of index.js (a copied or synced extensions
+// folder) must never be written over a newer file.
+function originalOf(current, backup) {
+    try { return strip(current); } catch (e) {
+        const saved = readBackup(backup);
+        if (saved === null) throw e;
+        return saved;
+    }
+}
+
+// A temp file left by a process that died between write and rename.
+function dropStaleTemps(target) {
+    const dir = path.dirname(target);
+    const prefix = path.basename(target) + '.crtl-tmp-';
+    for (const name of fs.readdirSync(dir)) {
+        if (!name.startsWith(prefix)) continue;
+        const p = path.join(dir, name);
+        try { if (fs.lstatSync(p).isFile()) fs.unlinkSync(p); } catch (e) { /* ignore */ }
     }
 }
 
@@ -253,6 +276,7 @@ function status(target) {
 // Make `target` carry `header`. Returns { changed, reason }.
 function apply(target, header) {
     const st = checkTarget(target);
+    dropStaleTemps(target);
     const backup = target + BACKUP_SUFFIX;
     const current = fs.readFileSync(target, 'utf8');
     const hash = hashOf(header);
@@ -261,9 +285,8 @@ function apply(target, header) {
     let original;
     if (curHash) {
         if (curHash === hash) return { changed: false, reason: 'already patched' };
-        const saved = readBackup(backup);
-        original = saved !== null ? saved : strip(current);
-        if (saved === null) writeAtomic(backup, original, st.mode);
+        original = originalOf(current, backup);
+        if (readBackup(backup) !== original) writeAtomic(backup, original, st.mode);
     } else {
         // Unpatched: this is the original. A backup that differs is from an
         // older file (Claude Code rewrote index.js), so replace it.
@@ -281,6 +304,7 @@ function apply(target, header) {
 // Put the original back and drop the backup. Returns { changed, reason }.
 function remove(target) {
     const st = checkTarget(target);
+    dropStaleTemps(target);
     const backup = target + BACKUP_SUFFIX;
     const current = fs.readFileSync(target, 'utf8');
     if (!patchHash(current)) {
@@ -288,9 +312,8 @@ function remove(target) {
         if (fs.existsSync(backup)) { fs.unlinkSync(backup); return { changed: false, reason: 'removed stale backup' }; }
         return { changed: false, reason: 'not patched' };
     }
-    const saved = readBackup(backup);
-    writeAtomic(target, saved !== null ? saved : strip(current), st.mode);
-    if (saved !== null) fs.unlinkSync(backup);
+    writeAtomic(target, originalOf(current, backup), st.mode);
+    if (fs.existsSync(backup)) fs.unlinkSync(backup);
     return { changed: true, reason: 'restored' };
 }
 

@@ -39,6 +39,10 @@ fs.mkdirSync(ccDir);
 execFileSync('cp', ['-R', src, path.join(ccDir, 'webview')]);
 const target = patcher.targetOf(ccDir);
 const backup = target + patcher.BACKUP_SUFFIX;
+// The installed copy may already be patched by this extension: test on the
+// original inside it, and drop its backup.
+fs.writeFileSync(target, patcher.strip(fs.readFileSync(target, 'utf8')));
+try { fs.unlinkSync(backup); } catch (e) { /* none */ }
 const original = read(target);
 console.log('source: ' + src + '\ncopy:   ' + target + ' (' + original.length + ' bytes)');
 
@@ -130,6 +134,23 @@ test('stale backup is replaced when the file was rewritten', () => {
     assert.ok(read(backup).equals(original));
     patcher.remove(target);
     assert.ok(read(target).equals(original) && !fs.existsSync(backup));
+});
+test('backup from another build never overwrites a patched file', () => {
+    const hP = header('Parastoo');
+    patcher.apply(target, hV);
+    fs.writeFileSync(backup, 'old bundle');
+    patcher.apply(target, hP);
+    assert.ok(read(backup).equals(original));
+    fs.writeFileSync(backup, 'old bundle');
+    patcher.remove(target);
+    assert.ok(read(target).equals(original) && !fs.existsSync(backup));
+});
+test('stale temp files are removed', () => {
+    const t = target + '.crtl-tmp-1-dead';
+    fs.writeFileSync(t, 'x');
+    patcher.apply(target, hV);
+    assert.ok(!fs.existsSync(t));
+    patcher.remove(target);
 });
 test('"use strict" directive stays first', () => {
     const d = path.join(tmp, 'strict', 'webview');

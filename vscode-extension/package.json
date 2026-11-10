@@ -36,6 +36,7 @@
         "claudeRtl.font": {
           "type": "string",
           "default": "Vazirmatn",
+          "scope": "application",
           "pattern": "^[A-Za-z0-9 ._-]*$",
           "patternErrorMessage": "Use letters, digits, spaces, dots, dashes and underscores.",
           "markdownDescription": "Font for Persian, Arabic and Hebrew letters in the Claude Code chat. Bundled: `Vazirmatn`, `Parastoo`. Any other name uses an installed font of that name. `none` (or empty) keeps the font Claude Code and the system pick. Latin text is never affected. Reload the window after a change."
@@ -43,6 +44,7 @@
         "claudeRtl.autoApply": {
           "type": "boolean",
           "default": true,
+          "scope": "application",
           "markdownDescription": "Apply the patch on startup and again after Claude Code updates (an update replaces the patched file)."
         }
       }

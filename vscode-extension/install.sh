@@ -31,7 +31,7 @@ sync_media() {
     rm -rf "$MEDIA_DIR"
     mkdir -p "$MEDIA_DIR/fonts"
     cp "$REPO_DIR/rtl-payload.js" "$MEDIA_DIR/"
-    cp "$REPO_DIR"/fonts/* "$MEDIA_DIR/fonts/"
+    cp -R "$REPO_DIR/fonts/." "$MEDIA_DIR/fonts/"
 }
 
 package() {
@@ -63,8 +63,10 @@ install() {
 uninstall() {
     need node "Install Node.js (https://nodejs.org)."
     need code "Install the 'code' command: VS Code > Command Palette > 'Shell Command: Install code command in PATH'."
-    node "$EXT_DIR/uninstall.js"
+    # Uninstall first: a window that still runs the extension could re-apply
+    # the patch between a restore and the uninstall.
     code --uninstall-extension "$EXT_ID" || true
+    node "$EXT_DIR/uninstall.js"
     log ""
     log "Removed. Reload VS Code to load Claude Code's original chat."
 }
