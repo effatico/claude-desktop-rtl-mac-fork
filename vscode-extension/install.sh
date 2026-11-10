@@ -51,7 +51,9 @@ install() {
     need code "Install the 'code' command: VS Code > Command Palette > 'Shell Command: Install code command in PATH'."
     local tmp
     tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
+    # Expand now: the trap runs after this function returns, when "tmp" is gone.
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" EXIT
     package "$tmp/claude-code-rtl.vsix"
     code --install-extension "$tmp/claude-code-rtl.vsix" --force
     log ""
