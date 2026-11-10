@@ -80,9 +80,15 @@
         // Only this much text of a block is read to decide its direction.
         // It bounds the work per block however long a response gets.
         var MAX_TEXT = 4000;
+        // And only this many nodes: a block built from thousands of empty
+        // elements must not be walked to its end either.
+        var MAX_NODES = 8000;
         // The app wraps the text of some blocks (table cells, list items) in
         // an inline element with its own first-strong `dir`.
         var INNER_SEL = 'span[dir],bdi[dir],div[dir]';
+        // Inline content that is a box, not text: an icon, an image, a control.
+        var ATOMIC_TAG = { SVG: 1, svg: 1, IMG: 1, PICTURE: 1, CANVAS: 1, VIDEO: 1,
+            BUTTON: 1, INPUT: 1, SELECT: 1, TEXTAREA: 1 };
 
         // -------------------------------------------------------------------
         // Text and direction
@@ -92,16 +98,25 @@
         // `skipLists`, nested lists are left out (used for a list item's own
         // text).
         function textOf(el, skipLists) {
-            var out = '';
+            var out = '', left = MAX_NODES;
             (function walk(node) {
                 for (var c = node.firstChild; c; c = c.nextSibling) {
-                    if (out.length > MAX_TEXT) return;
-                    if (c.nodeType === 3) { out += c.data; continue; }
+                    if (out.length >= MAX_TEXT || --left < 0) return;
+                    if (c.nodeType === 3) {
+                        // Never copy more than is read: one text node can
+                        // hold megabytes.
+                        var room = MAX_TEXT - out.length;
+                        out += c.data.length > room ? c.data.slice(0, room) : c.data;
+                        continue;
+                    }
                     if (c.nodeType !== 1) continue;
                     var tag = c.tagName;
                     if (SKIP_TAG[tag]) { out += ' '; continue; }
                     if (skipLists && (tag === 'UL' || tag === 'OL')) continue;
-                    if (c.isContentEditable) continue;
+                    // Not `isContentEditable`: that asks the style engine and
+                    // climbs every ancestor, once per node read.
+                    var ce = c.getAttribute('contenteditable');
+                    if (ce !== null && ce !== 'false') continue;
                     var cl = c.classList;
                     if (cl && (cl.contains('katex') || cl.contains('katex-display'))) continue;
                     if (tag === 'BR') { out += '\n'; continue; }
@@ -133,11 +148,14 @@
                 var chunk = chunks[i];
                 if (!chunk) continue;
                 var hasRtl = RTL_CH.test(chunk);
-                if (!hasRtl && isTechnical(chunk)) continue;
+                // Once per chunk: a chunk without spaces can hold thousands
+                // of words, and this test reads the whole chunk.
+                var technical = isTechnical(chunk);
+                if (!hasRtl && technical) continue;
                 TOKEN.lastIndex = 0;
                 while ((m = TOKEN.exec(chunk))) {
                     if (RTL_CH.test(m[0])) { rtl++; if (!first) first = 'rtl'; }
-                    else if (!hasRtl || !isTechnical(chunk)) { ltr++; if (!first) first = 'ltr'; }
+                    else if (!technical) { ltr++; if (!first) first = 'ltr'; }
                 }
             }
             if (!rtl) return null;
@@ -162,13 +180,42 @@
         // --font the global is unset and nothing happens here. The face only
         // covers RTL code points, so putting it first in an element's own
         // font stack changes RTL text and nothing else.
+        //
+        // The stack is written as an inline style, which would outlive a
+        // change of the element's own font (a reused element that becomes
+        // tool output in a monospace font). So the inline value the element
+        // had is remembered, `dropFont` puts it back, and `collect` drops and
+        // re-applies the font each time it scans an element.
+        var fontPrev = new WeakMap();
+
         function applyFont(el) {
             var family = window.__claudeRtlFont;
             if (!family || el.hasAttribute(A_FONT)) return;
             var current = getComputedStyle(el).fontFamily;
             if (!current || isMonoFamily(current)) return;
-            el.style.fontFamily = "'" + family + "', " + current;
+            fontPrev.set(el, {
+                value: el.style.getPropertyValue('font-family'),
+                priority: el.style.getPropertyPriority('font-family')
+            });
+            el.style.setProperty('font-family', "'" + family + "', " + current);
             el.setAttribute(A_FONT, '');
+        }
+
+        function dropFont(el) {
+            if (!el.hasAttribute(A_FONT)) return;
+            var family = window.__claudeRtlFont;
+            var prev = fontPrev.get(el);
+            // If the app wrote a font of its own since, that one stays.
+            if (!family || el.style.getPropertyValue('font-family').indexOf(family) !== -1) {
+                if (prev && prev.value) el.style.setProperty('font-family', prev.value, prev.priority);
+                else el.style.removeProperty('font-family');
+            }
+            fontPrev.delete(el);
+            el.removeAttribute(A_FONT);
+        }
+
+        function isField(el) {
+            return el.tagName === 'TEXTAREA' || el.tagName === 'INPUT';
         }
 
         // -------------------------------------------------------------------
@@ -207,15 +254,17 @@
 
         // Inline wrappers that belong to `el` itself, not to a block or group
         // nested inside it.
+        // The walk stops at those, so a block is read once however deep the
+        // lists inside it are nested.
         function innerOf(el, sel) {
-            var out = [], found = el.querySelectorAll(sel);
-            for (var i = 0; i < found.length; i++) {
-                var s = found[i];
-                if (s.closest(SKIP_SEL)) continue;
-                var near = s.parentElement.closest(NEAR_SEL);
-                if (near && near !== el && el.contains(near)) continue;
-                out.push(s);
-            }
+            var out = [];
+            (function walk(node) {
+                for (var c = node.firstElementChild; c; c = c.nextElementSibling) {
+                    if (c.matches(SKIP_SEL) || c.matches(NEAR_SEL)) continue;
+                    if (c.matches(sel)) out.push(c);
+                    walk(c);
+                }
+            })(el);
             return out;
         }
 
@@ -266,30 +315,50 @@
         // A child of a list or table: it takes the group's direction so that
         // markers and columns stay on one side. If its own language differs,
         // its text is ordered per line and aligned to the group's side.
+        // A monospace child (a cell of tool output) is not written to.
         function markChild(el, groupDir, text) {
+            if (el.closest(SKIP_SEL) || isMono(el)) { clear(el); return; }
             var own = decide(text) || 'ltr';
             mark(el, groupDir, own !== groupDir);
             syncInner(el, own);
         }
 
+        // What belongs to `list` itself: the text blocks in its items and
+        // the lists directly nested in it. The walk does not go into a nested
+        // list or table, so each list reads only its own part of the tree.
+        function partsOf(list) {
+            var own = [], nested = [];
+            (function walk(node) {
+                for (var c = node.firstElementChild; c; c = c.nextElementSibling) {
+                    var tag = c.tagName;
+                    if (tag === 'UL' || tag === 'OL') { nested.push(c); continue; }
+                    if (tag === 'TABLE' || c.matches(SKIP_SEL)) continue;
+                    if (c.matches(IN_LIST_SEL)) own.push(c);
+                    walk(c);
+                }
+            })(list);
+            return { own: own, nested: nested };
+        }
+
         // `inherited` is the direction of the list around a nested list that
         // has no RTL text of its own: it keeps its markers on the same side.
-        function processList(list, inherited) {
-            if (!list.isConnected) return;
-            var i, items = list.children;
-            var inner = list.querySelectorAll(IN_LIST_SEL);
-            var dir = isMono(list) ? null : (decide(textOf(list, false)) || inherited || null);
+        // `done` holds the lists already handled in this run; a nested list is
+        // reached from the list around it and must not be walked again.
+        // `noText` says the caller already found no RTL text in the list.
+        function processList(list, inherited, done, noText) {
+            if (!list.isConnected || done.has(list)) return;
+            done.add(list);
+            var i, items = list.children, parts = partsOf(list);
+            var dir = isMono(list) ? null :
+                ((noText ? null : decide(textOf(list, false))) || inherited || null);
             if (!dir) {
                 unmark(list);
                 for (i = 0; i < items.length; i++) clear(items[i]);
-                for (i = 0; i < inner.length; i++) {
-                    if (inner[i].closest(GROUP_SEL) === list) clear(inner[i]);
-                }
+                for (i = 0; i < parts.own.length; i++) clear(parts.own[i]);
                 // Nested lists that had taken this list's direction.
-                var below = list.querySelectorAll('ul[' + A_DIR + '],ol[' + A_DIR + ']');
-                for (i = 0; i < below.length; i++) {
-                    if (below[i].parentElement.closest(GROUP_SEL) === list &&
-                        !decide(textOf(below[i], false))) processList(below[i], null);
+                for (i = 0; i < parts.nested.length; i++) {
+                    if (parts.nested[i].hasAttribute(A_DIR) &&
+                        !decide(textOf(parts.nested[i], false))) processList(parts.nested[i], null, done, true);
                 }
                 return;
             }
@@ -297,33 +366,33 @@
             for (i = 0; i < items.length; i++) {
                 if (items[i].tagName === 'LI') markChild(items[i], dir, textOf(items[i], true));
             }
-            for (i = 0; i < inner.length; i++) {
-                if (inner[i].closest(GROUP_SEL) === list) {
-                    markChild(inner[i], dir, textOf(inner[i], true));
-                }
+            for (i = 0; i < parts.own.length; i++) {
+                markChild(parts.own[i], dir, textOf(parts.own[i], true));
             }
             // Nested lists with RTL text are processed on their own.
-            var nested = list.querySelectorAll('ul,ol');
-            for (i = 0; i < nested.length; i++) {
-                if (nested[i].parentElement.closest(GROUP_SEL) !== list) continue;
-                if (!decide(textOf(nested[i], false))) processList(nested[i], dir);
+            for (i = 0; i < parts.nested.length; i++) {
+                if (!decide(textOf(parts.nested[i], false))) processList(parts.nested[i], dir, done, true);
             }
         }
 
         function processTable(table) {
             if (!table.isConnected) return;
-            var i, cells = table.querySelectorAll('th,td,caption');
+            // `rows`, `cells` and `tHead` list this table's own parts, never
+            // those of a table nested in one of its cells.
+            var i, j, cells = [], rows = table.rows;
+            if (table.caption) cells.push(table.caption);
+            for (i = 0; i < rows.length; i++) {
+                for (j = 0; j < rows[i].cells.length; j++) cells.push(rows[i].cells[j]);
+            }
             var dir = null;
             if (!isMono(table)) {
                 // A table with an RTL header row is an RTL table even when its
                 // cells are mostly numbers, code or English terms.
-                var head = table.querySelector('thead') || table.querySelector('tr');
-                if (head && head.closest('table') === table &&
-                    decide(textOf(head, false)) === 'rtl') dir = 'rtl';
+                var head = table.tHead || rows[0];
+                if (head && decide(textOf(head, false)) === 'rtl') dir = 'rtl';
                 else dir = decide(textOf(table, false));
             }
             for (i = 0; i < cells.length; i++) {
-                if (cells[i].closest(GROUP_SEL) !== table) continue;
                 if (dir) markChild(cells[i], dir, textOf(cells[i], false));
                 else clear(cells[i]);
             }
@@ -360,6 +429,46 @@
             return !!el.firstElementChild && /flex|grid/.test(getComputedStyle(el).display);
         }
 
+        // What the direct children of `el` are: `text` when it holds text of
+        // its own, `atomic` for the number of inline boxes that are not text
+        // (icons, images, inline-blocks), `block` when a child is a block.
+        // Kept for one run: many text nodes share the same ancestors.
+        var shapes = null;
+
+        function isAtomic(el, display) {
+            return display !== 'inline' || !!ATOMIC_TAG[el.tagName];
+        }
+
+        function shapeOf(el) {
+            var s = shapes && shapes.get(el);
+            if (s) return s;
+            s = { text: false, atomic: 0, block: false };
+            for (var c = el.firstChild; c; c = c.nextSibling) {
+                if (c.nodeType === 3) {
+                    if (!s.text && /\S/.test(c.data)) s.text = true;
+                    continue;
+                }
+                if (c.nodeType !== 1) continue;
+                var d = getComputedStyle(c).display;
+                if (d === 'none' || d === 'contents') continue;
+                if (!/^inline/.test(d)) s.block = true;
+                else if (isAtomic(c, d)) s.atomic++;
+            }
+            if (shapes) shapes.set(el, s);
+            return s;
+        }
+
+        // `el` has no text of its own and places `from` next to another
+        // inline box: a button with an icon and a label. A direction on `el`
+        // would swap the two, so the label is the box to mark.
+        function arrangesBoxes(el, from) {
+            var s = shapeOf(el);
+            if (s.text) return false;
+            var d = getComputedStyle(from).display;
+            var own = /^inline/.test(d) && isAtomic(from, d) ? 1 : 0;
+            return s.atomic - own > 0;
+        }
+
         // The element that owns the direction of a text node, or null when
         // the text must be left alone.
         function ownerOf(el) {
@@ -371,8 +480,9 @@
             }
             // Interface text, or prose markup used for layout: the nearest box
             // that lays the text itself out.
-            var n = el;
+            var n = el, from = null;
             while (n && n !== document.body) {
+                if (from && arrangesBoxes(n, from)) return from;
                 var display = getComputedStyle(n).display;
                 // An inline-block that is the only child of its parent is a
                 // wrapper around the text (used to measure or clip it), not a
@@ -381,41 +491,42 @@
                     (display === 'inline-block' && n.parentElement &&
                         n.parentElement.children.length === 1);
                 if (!passThrough) break;
+                from = n;
                 n = n.parentElement;
             }
             if (!n || n === document.body || n === document.documentElement) return null;
             // A box that also lays out other boxes is a layout container.
             // Flipping it would reorder the interface, so leave it alone.
-            if (laysOutBoxes(n)) return null;
-            for (var c = n.firstElementChild; c; c = c.nextElementSibling) {
-                var d = getComputedStyle(c).display;
-                if (d !== 'none' && d !== 'contents' && !/^inline/.test(d)) return null;
-            }
+            if (laysOutBoxes(n) || shapeOf(n).block) return null;
             return n;
         }
 
         function collect(root, sets, seenParents) {
             if (!root || root.nodeType !== 1 || !root.isConnected) return;
 
+            // Groups are queued outermost first, so a list is always handled
+            // before the lists nested in it. The climb stops at a group that
+            // is queued already: the groups around it were queued with it.
             function add(el) {
                 var group = el.closest(GROUP_SEL);
-                if (group && !isProseGroup(group)) group = null;
-                if (group) {
-                    (group.tagName === 'TABLE' ? sets.tables : sets.lists).add(group);
+                if (!group || !isProseGroup(group)) { sets.blocks.add(el); return; }
+                var chain = [];
+                while (group && !sets.groups.has(group)) {
+                    chain.push(group);
                     // The group is part of the text of every list around it.
-                    var outer = group.parentElement && group.parentElement.closest(GROUP_SEL);
-                    while (outer && isProseGroup(outer)) {
-                        (outer.tagName === 'TABLE' ? sets.tables : sets.lists).add(outer);
-                        outer = outer.parentElement && outer.parentElement.closest(GROUP_SEL);
-                    }
-                } else {
-                    sets.blocks.add(el);
+                    group = group.parentElement && group.parentElement.closest(GROUP_SEL);
+                    if (group && !isProseGroup(group)) group = null;
                 }
+                for (var k = chain.length - 1; k >= 0; k--) sets.groups.add(chain[k]);
             }
 
             // Elements marked earlier: their text may have changed or gone.
             // An inline wrapper is re-checked through the block it follows.
+            // One that now sits inside code or an editor (the app moved it)
+            // is given back as it was. Text fields belong to `onInput`.
             function recheck(el) {
+                if (isField(el)) return;
+                if (el.closest(SKIP_SEL)) { clear(el); return; }
                 if (el.hasAttribute(A_WRAP)) {
                     var only = el.firstElementChild;
                     if (only && only.tagName === 'TABLE' && el.children.length === 1) el = only;
@@ -432,6 +543,14 @@
             var above = root.closest('[' + A_DIR + ']');
             if (above) recheck(above);
 
+            // The font is taken off and, below, put back where RTL text still
+            // sits in a font that is not monospace and outside code.
+            var fonted = root.querySelectorAll('[' + A_FONT + ']');
+            for (i = 0; i < fonted.length; i++) {
+                if (!isField(fonted[i])) dropFont(fonted[i]);
+            }
+            if (!isField(root)) dropFont(root);
+
             var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
             var node;
             while ((node = walker.nextNode())) {
@@ -446,12 +565,17 @@
         }
 
         function run(roots) {
-            var sets = { blocks: new Set(), lists: new Set(), tables: new Set() };
-            var seenParents = new Set();
-            for (var i = 0; i < roots.length; i++) collect(roots[i], sets, seenParents);
+            var sets = { blocks: new Set(), groups: new Set() };
+            var seenParents = new Set(), done = new Set();
+            shapes = new Map();
+            try {
+                for (var i = 0; i < roots.length; i++) collect(roots[i], sets, seenParents);
+            } finally { shapes = null; }
             sets.blocks.forEach(processBlock);
-            sets.lists.forEach(function(list) { processList(list); });
-            sets.tables.forEach(processTable);
+            sets.groups.forEach(function(group) {
+                if (group.tagName === 'TABLE') processTable(group);
+                else processList(group, null, done);
+            });
         }
 
         // -------------------------------------------------------------------
@@ -461,11 +585,11 @@
         function onInput(e) {
             var t = e.target;
             if (!t || t.nodeType !== 1) return;
-            var isField = t.tagName === 'TEXTAREA' ||
+            var textField = t.tagName === 'TEXTAREA' ||
                 (t.tagName === 'INPUT' && /^(text|search)?$/.test(t.getAttribute('type') || ''));
-            if (!isField) return;
+            if (!textField) return;
             var dir = decide(t.value);
-            if (dir) { mark(t, dir, false); applyFont(t); } else unmark(t);
+            if (dir) { mark(t, dir, false); applyFont(t); } else { unmark(t); dropFont(t); }
         }
 
         // -------------------------------------------------------------------

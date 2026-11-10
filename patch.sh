@@ -160,6 +160,21 @@ verify_source_app() {
     success "Signature is valid and belongs to Anthropic ($EXPECTED_TEAM_ID)."
 }
 
+# True when the bundle at $1 is not a separate copy of the original: it is a
+# symbolic link, or one of its main parts is the same file as the original's
+# (same device and inode). Every step after the copy writes into $1, so a
+# "copy" that still points at the original must never be patched.
+aliases_source_app() {
+    local rel
+    [ -L "$1" ] && return 0
+    for rel in "" "/Contents" "/Contents/Info.plist" "/Contents/MacOS" \
+        "/Contents/Frameworks" "/Contents/Resources" \
+        "/Contents/Resources/app.asar" "/Contents/Resources/electron.icns"; do
+        [ "$1$rel" -ef "$SOURCE_APP$rel" ] && return 0
+    done
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Claude process management
 # ---------------------------------------------------------------------------
@@ -325,6 +340,9 @@ install_patch() {
 
     # --- Preflight ---
     [ ! -d "$SOURCE_APP" ] && die "Claude.app not found at $SOURCE_APP. Is Claude Desktop installed?"
+    # "cp -R" copies a symbolic link named on the command line as a link, so a
+    # linked Claude.app would give a "copy" that points back at the original.
+    [ -L "$SOURCE_APP" ] && die "$SOURCE_APP is a symbolic link, not the app itself. Move the real Claude.app into /Applications and try again."
     [ ! -f "$PAYLOAD_FILE" ] && die "rtl-payload.js not found at $PAYLOAD_FILE. Re-clone the repository."
 
     check_dependencies
@@ -337,13 +355,18 @@ install_patch() {
     step "Creating patched copy..."
     mkdir -p "$HOME/Applications"
 
-    if [ -d "$PATCHED_APP" ]; then
+    if [ -e "$PATCHED_APP" ] || [ -L "$PATCHED_APP" ]; then
         log "Removing previous patched copy..."
         rm -rf "$PATCHED_APP"
     fi
 
     log "Copying Claude.app → Claude-RTL.app (this may take a moment)..."
     cp -R "$SOURCE_APP" "$PATCHED_APP"
+    # The copy must be a bundle of its own before anything is written to it.
+    if aliases_source_app "$PATCHED_APP"; then
+        [ -L "$PATCHED_APP" ] && rm -f "$PATCHED_APP"
+        die "The copy at $PATCHED_APP still points at the original Claude.app. Nothing was changed."
+    fi
     # Check the copy as well: it is what gets patched, and the original could
     # have been swapped between the first check and the copy.
     if ! is_genuine_claude "$PATCHED_APP"; then
