@@ -3,3 +3,4 @@ test/**
 install.sh
 .gitignore
 *.vsix
+docs/**
