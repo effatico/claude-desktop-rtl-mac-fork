@@ -161,6 +161,10 @@ cd claude-desktop-rtl-mac
 - **خطای «is not an intact app signed by Anthropic»:** Claude Desktop را از [claude.ai/download](https://claude.ai/download) دوباره نصب کنید.
 - **هشدار Gatekeeper:** روی برنامه راست‌کلیک کنید و Open را بزنید، یا از System Settings → Privacy & Security گزینهٔ Open Anyway را انتخاب کنید.
 
+## Claude Code در VS Code
+
+پوشهٔ [vscode-extension/](vscode-extension/) یک افزونهٔ محلی VS Code دارد که همین قاعدهٔ جهت و فونت را به گفت‌وگوی افزونهٔ Claude Code می‌آورد. نصب با `./install.sh` در همان پوشه. این افزونه فایل `webview/index.js` افزونهٔ Claude Code را تغییر می‌دهد و بعد از هر به‌روزرسانی Claude Code آن را دوباره اعمال می‌کند. جزئیات و محدودیت‌ها در [README آن](vscode-extension/README.md).
+
 ## زبان‌های دیگر
 
 تمرکز این فورک فارسی است و با متن فارسی و انگلیسی آزمایش شده. قاعدهٔ جهت برای عربی و عبری هم کار می‌کند. وزیرمتن و پرستو حروف عربی را دارند ولی عبری را نه؛ متن عبری با فونت سیستم نمایش داده می‌شود.
@@ -356,6 +360,10 @@ After the keychain prompt you may see a blank window that never finishes loading
 ### macOS Gatekeeper warning
 The app is ad-hoc signed, so macOS may warn on first launch. Right-click → Open, or go to System Settings → Privacy & Security → Open Anyway.
 
+## Claude Code in VS Code
+
+[vscode-extension/](vscode-extension/) holds a local VS Code extension that brings the same direction rule and font to the chat of the Claude Code extension. Install it with `./install.sh` in that folder. It edits the Claude Code extension's `webview/index.js` and re-applies the change after every Claude Code update. Details and caveats are in [its README](vscode-extension/README.md).
+
 ## Other languages
 
 This fork is focused on Persian and is tested with Persian and English text. The direction rule also works for Arabic and Hebrew. Vazirmatn and Parastoo cover Arabic letters but not Hebrew; Hebrew text uses the system font. For a Hebrew font, put one with Hebrew glyphs (Heebo, Rubik, Assistant) in `fonts/` and pass its name to `--font`.
@@ -368,6 +376,7 @@ claude-desktop-rtl-mac/
 ├── rtl-payload.js    # Direction and font JS injected into Claude's windows
 ├── fonts/            # Vazirmatn and Parastoo, with their licences
 ├── icon.icns         # App icon with an "RTL" badge
+├── vscode-extension/ # Local VS Code extension for the Claude Code chat
 ├── README.md
 └── LICENSE
 ```

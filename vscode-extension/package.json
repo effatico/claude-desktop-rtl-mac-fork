@@ -1,0 +1,55 @@
+{
+  "name": "claude-code-rtl",
+  "displayName": "Claude Code RTL",
+  "description": "Persian (and other right-to-left) text in the Claude Code chat: each block takes the direction of the language most of it is written in, code stays left-to-right, and Persian letters get the Vazirmatn font.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeRtl.apply",
+        "title": "Claude RTL: Apply patch"
+      },
+      {
+        "command": "claudeRtl.remove",
+        "title": "Claude RTL: Remove patch"
+      },
+      {
+        "command": "claudeRtl.status",
+        "title": "Claude RTL: Status"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Code RTL",
+      "properties": {
+        "claudeRtl.font": {
+          "type": "string",
+          "default": "Vazirmatn",
+          "pattern": "^[A-Za-z0-9 ._-]*$",
+          "patternErrorMessage": "Use letters, digits, spaces, dots, dashes and underscores.",
+          "markdownDescription": "Font for Persian, Arabic and Hebrew letters in the Claude Code chat. Bundled: `Vazirmatn`, `Parastoo`. Any other name uses an installed font of that name. `none` (or empty) keeps the font Claude Code and the system pick. Latin text is never affected. Reload the window after a change."
+        },
+        "claudeRtl.autoApply": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Apply the patch on startup and again after Claude Code updates (an update replaces the patched file)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:uninstall": "node ./uninstall.js",
+    "test": "node test/patcher.test.js"
+  }
+}
